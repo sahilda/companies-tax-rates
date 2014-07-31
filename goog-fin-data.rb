@@ -3,8 +3,10 @@ require 'restclient'
 require 'csv'
 require 'json'
 
-def get_financials(ticker)
-	page = Nokogiri::HTML(RestClient.get("https://www.google.com/finance?q=NASDAQ%3A#{ticker}&fstype=ii&ei=gSvXU6iWEIGiigK-nIHgCw"))
+def get_financials(company)
+	ticker = company[0]
+	exchange = company[1]['exchange']
+	page = Nokogiri::HTML(RestClient.get("https://www.google.com/finance?q=#{ticker.upcase}%3A#{ticker}&fstype=ii&ei=gSvXU6iWEIGiigK-nIHgCw"))
 
 	header_info = page.css("div,id-incannualdiv").css("table").css("thead")[1]
 	rev_info = page.css("div,id-incannualdiv").css("table").css("tbody").css("tbody")[1].css("tr")[2]
@@ -55,7 +57,7 @@ def get_financials(ticker)
 	income_before_tax.size.times do | idx |
 		unless idx == 0
 			tax_paid << income_before_tax[idx].to_f - income_after_tax[idx].to_f
-			effective_tax_rate << tax_paid[idx] / rev[idx].to_f * 100
+			rev[idx].to_f == 0 ? effective_tax_rate << 'NA' : effective_tax_rate << tax_paid[idx] / rev[idx].to_f * 100
 		end
 	end
 
@@ -67,28 +69,60 @@ def convert_to_hash(data)
 	result['units'] = data[0][0]
 	data[0].size.times do | idx |
 		unless idx == 0
-			result["year#{idx}"] = {}
-			result["year#{idx}"]['date'] = data[0][idx]
-			result["year#{idx}"]['revenue'] = data[1][idx]
-			result["year#{idx}"]['profit'] = data[2][idx]
-			result["year#{idx}"]['taxes'] = data[3][idx]
-			result["year#{idx}"]['etr'] = data[4][idx]
+			year = data[0][idx][/(\d)+/]
+			result[year] = {}
+			result[year]['date'] = data[0][idx]
+			result[year]['revenue'] = data[1][idx]
+			result[year]['profit'] = data[2][idx]
+			result[year]['taxes'] = data[3][idx]
+			result[year]['etr'] = data[4][idx]
 		end
 	end
 	result
 end
 
-def make_dataset(companies)
-	json = {}
-	companies.each do | comp |
-		data = get_financials(comp)
-		json[comp] = convert_to_hash(data) 
+def make_dataset(stocks, file)
+	json = stocks
+	i = 0
+
+	json.each do | company |
+		i += 1 
+		begin
+			data = get_financials(company)
+			json[company[0]] = convert_to_hash(data).merge(json[company[0]])
+		rescue
+		end
+		break if i == 5
 	end
 
-	File.open('stock-data.json','w') do | f |
+	File.open("data/#{file}-stock-data.json",'w') do | f |
 		f.write(json.to_json)
 	end
 end
 
-companies = ['XOOM','GOOGL','AAPL']
-make_dataset(companies)
+def companies(exchange)
+	result = {}
+	csv = CSV.foreach("data/#{exchange}.csv", :headers => TRUE) do | row |
+	  result[row['Symbol']] = {}
+	  result[row['Symbol']]['name'] = row['Name']
+	  result[row['Symbol']]['market_cap'] = row['MarketCap']
+	  result[row['Symbol']]['ipo_year'] = row['IPOyear']
+	  result[row['Symbol']]['sector'] = row['sector']
+	  result[row['Symbol']]['industry'] = row['industry']
+	  result[row['Symbol']]['exchange'] = exchange
+	  result[row['Symbol']]['exchange2'] = 'amex' if exchange == 'nysemkt'
+	end
+	result
+end
+
+def main
+	nasdaq = companies('nasdaq')
+	amex = companies('nysemkt')
+	nyse = companies('nyse')
+
+	make_dataset(nyse, 'nyse')
+	make_dataset(amex, 'nysemkt')
+	make_dataset(nasdaq, 'nasdaq')
+end
+
+main
